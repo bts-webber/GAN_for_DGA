@@ -6,12 +6,14 @@ warnings.filterwarnings("ignore")
 batch_size=200
 #域名最大长度
 max_domain_size=50
+#生成的二级域名长度
+g_domain_len=8
 #鉴别器初始训练epochs
 D_epochs=1
 #DG训练的epochs
 DG_epochs=1000
 #一个DG epochs中生成器训练的steps
-G_steps=5
+G_steps=7
 #一个DG epochs中鉴别器训练的steps
 D_steps=5
 #鉴别器模型保存的位置
