@@ -4,6 +4,7 @@ from keras.preprocessing.sequence import pad_sequences
 from keras.models import load_model
 from keras.optimizers import *
 from keras.layers import Lambda
+from keras.callbacks import TensorBoard
 from D import get_data,batch_generator,get_D
 import keras.backend as K
 from env import *
@@ -11,40 +12,40 @@ import numpy as np
 import random
 
 
-def padding(x):
-    return tf.pad(x, [[0, 0], [max_domain_size - 12, 0], [0, 0]])
-def padding_shape(input_shape):
-    return (input_shape[0], max_domain_size, chars_size)
-def to_one_hot(x):
+def padding(x,max_len):
     shape=x.shape.as_list()
-    one=tf.constant(np.ones(shape=shape,dtype="float32"))
-    zero = tf.constant(np.zeros(shape=shape, dtype="float32"))
-    m=tf.reduce_max(x,axis=2,keep_dims=True)
-    condition=tf.equal(m,x)
-    return tf.where(condition,one,zero)
-def to_one_hot_shape(input_shape):
-    return input_shape
+    return tf.pad(x, [[0, 0], [max_len - shape[1], 0], [0, 0]])
+def padding_shape(input_shape,max_len):
+    return (input_shape[0], max_len, chars_size)
 def get_G():
-    input_random = Input(batch_shape=(batch_size, 4, chars_size), name="input_random")
+    input_random = Input(batch_shape=(batch_size, g_domain_len, chars_size), name="input_random")
     input_root = Input(batch_shape=(batch_size, 4, chars_size), name="input_root")
-    #input_main = multiply([input_random, input_root])
-    input_main = concatenate([input_random, input_root], axis=1)
+    input_root_pad=Lambda(lambda x:padding(x,max_len=g_domain_len),
+                          output_shape=lambda shape:padding_shape(shape,max_len=g_domain_len),
+                          name="padding_root"
+                          )(input_root)
+    input_main = multiply([input_random, input_root_pad])
+    #input_main = concatenate([input_random, input_root], axis=1)
     lstm_1 = LSTM(units=64, return_sequences=True, dropout=0.5, name="LSTM_1")(input_main)
     lstm_2 = LSTM(units=32, return_sequences=True, dropout=0.5, name="LSTM_2")(lstm_1)
     dense_1 = Dense(units=32, activation="relu", name="Dense_1")(lstm_2)
     dense_2 = Dense(units=chars_size, activation="softmax", name="Dense_2")(dense_1)
     # onehot=Lambda(to_one_hot,to_one_hot_shape,name="to_one_hot")(dense_2)
     concate = concatenate([dense_2, input_root], axis=1, name="concate")
-    pad = Lambda(padding, padding_shape, name="padding")(concate)
+    pad = Lambda(lambda x:padding(x,max_len=max_domain_size),
+                 output_shape=lambda shape:padding_shape(shape,max_len=max_domain_size),
+                 name="padding_output"
+                 )(concate)
+    print(pad.shape)
     G = Model(inputs=[input_random, input_root], outputs=pad, name="G")
+    print(G.get_output_shape_at(0))
     return G
 def get_DG(D,G):
-    input_dg_random=Input(batch_shape=(batch_size,4,chars_size))
+    input_dg_random=Input(batch_shape=(batch_size,g_domain_len,chars_size))
     input_dg_root=Input(batch_shape=(batch_size,4,chars_size))
     output_dg=D(G(inputs=[input_dg_random,input_dg_root]))
     DG=Model(inputs=[input_dg_random,input_dg_root],outputs=[output_dg])
     DG.compile(optimizer=Adam(), loss=DG_loss,metrics=["accuracy"])
-    #DG_D=Model(inputs=[input_dg_random,input_dg_root],outputs=[output_dg])
     #DG_D.compile(optimizer=Adam(),loss="categorical_crossentropy",metrics=["accuracy"])
     return DG
 def DG_loss(y_true,y_pre):
@@ -60,10 +61,10 @@ def random_generator(batch_size):
         for i in range(batch_size):
             root = random.choice(roots)
             root_one_hot = to_onehot(root)
-            root_pad = pad_sequences([root_one_hot], maxlen=4)[0]
+            root_pad = pad_sequences([root_one_hot], maxlen=4,padding="post")[0]
             root_batch.append(root_pad)
         root_batch=np.array(root_batch)
-        random_batch = np.random.normal(size=(batch_size, 4, chars_size))
+        random_batch = np.random.normal(size=(batch_size, g_domain_len, chars_size))
         yield ([random_batch,root_batch],y_input)
 def to_s(x):
     x_shape=x.shape
@@ -78,6 +79,8 @@ def to_s(x):
             s+=chars[index]
         except ValueError:
             pass
+    if s[-1]==".":
+        s=s[0:-1]
     return s
 def main():
     D=load_model(D_model_path)
@@ -87,6 +90,8 @@ def main():
     random_g = random_generator(batch_size=batch_size)
     data_set,data_label=get_data()
     data_generator=batch_generator(data_set,data_label,batch_size//2,epochs=10000)
+    call_d = TensorBoard(log_dir="log/DG_D.log", write_grads=True)
+    call_g= TensorBoard(log_dir="log/DG_G.log", write_grads=True)
     for e in range(DG_epochs):
         print("开训训练鉴别器D-[===============]-{}/{}Epochs".format(e+1, DG_epochs))
         D.trainable = True
@@ -106,15 +111,20 @@ def main():
             for index in indexs:
                 d_fit_b.append(d_fit_batch[index])
                 d_fit_l.append(d_fit_label[index])
-            D.fit(np.array(d_fit_b),np.array(d_fit_l),batch_size=batch_size)
+            #D.fit(np.array(d_fit_b),np.array(d_fit_l),batch_size=batch_size,callbacks=[call_d])
+            D.fit(np.array(d_fit_b), np.array(d_fit_l), batch_size=batch_size)
         print("开训训练生成器G-[===============]-{}/{}Epochs".format(e + 1, DG_epochs))
         D.trainable = False
         G.trainable = True
+        #DG.fit_generator(random_g, steps_per_epoch=G_steps,callbacks=[call_g])
         DG.fit_generator(random_g, steps_per_epoch=G_steps)
-        if e%20==0:
+        if e%10==0:
             one_pre = G.predict_on_batch(random_g.__next__()[0])
             for n in range(10):
                 print(to_s(one_pre[n]))
+    D.save("model/DG_D_model")
+    G.save("model/DG_G_model")
+    DG.save("model/DG_model")
         # DG_D.fit_generator(random_g,steps_per_epoch=(D_steps//3)*2)
         # D.fit_generator(data_generator,steps_per_epoch=D_steps//3)
 
