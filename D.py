@@ -63,8 +63,10 @@ def test(X_test,Y_test):
         Y_pre.extend(y_pre.round())
         steps+=1
         print("%d/%d batch" % (steps, batch_num))
-    precision=precision_score(Y_true,Y_pre)
-    recall=recall_score(Y_true,Y_pre)
+    Y_true=np.array(Y_true)
+    Y_pre=np.array(Y_pre)
+    precision=precision_score(Y_true[:,1:2],Y_pre[:,1:2])
+    recall=recall_score(Y_true[:,1:2],Y_pre[:,1:2])
     print("P:",precision)
     print("R:",recall)
 def get_data():
